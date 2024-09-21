@@ -1,0 +1,9 @@
+/target
+
+# audio file
+*.mp3
+*.wav
+*.pcm
+
+# Text file
+*.txt
