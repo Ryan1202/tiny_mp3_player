@@ -3,6 +3,12 @@
 
 一个用Rust编写的简单MP3播放器，用于学习MP3解码。目前仅支持单声道解码。
 
+## 编译
+
+```bash
+cargo build --release
+```
+
 ## 使用
 
 ```bash
