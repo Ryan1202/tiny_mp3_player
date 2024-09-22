@@ -1,6 +1,7 @@
-use std::{fs::File, io::{BufReader, Read}};
+use std::{fs::File, io::{BufReader, Read}, vec};
 
 use bitstream::BitStream;
+use debug::DebugType;
 use decode::{anti_alias, frequency_inversion, imdct::imdct, reorder, requantize::requantize, synthesis::Synthesis};
 use huffman::decode_huffman;
 use mpeg_frame::{parse_header, parse_scale_factor, parse_side_info, types::{MpegChannelMode, MpegProtection, ScaleFactor}};
@@ -13,6 +14,7 @@ pub mod huffman;
 pub mod decode;
 pub mod debug;
 
+const SQRT2: f32 = 1.41421356;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DecodeError {
@@ -30,9 +32,9 @@ pub enum DecodeError {
 pub struct Decoder {
     pub main_buf: Vec<u8>,
     main_data_begin: usize,
-    prev_samples: [[f32; 18]; 32],
+    prev_samples: [[[f32; 18]; 32]; 2],
     synthesis: Synthesis,
-    fifo: [f32; 1024],
+    fifo: [[f32; 1024]; 2],
 
     pub channel_num: usize,
     pub sample_rate: usize,
@@ -43,15 +45,15 @@ impl Decoder {
         Self {
             main_buf: Vec::new(),
             main_data_begin: 0,
-            prev_samples: [[0f32; 18]; 32],
+            prev_samples: [[[0f32; 18]; 32]; 2],
             synthesis: Synthesis::new(),
-            fifo: [0f32; 1024],
+            fifo: [[0f32; 1024]; 2],
             channel_num: 0,
             sample_rate: 0,
         }
     }
 
-    pub fn decode_mp3(&mut self, reader: &mut BufReader<File>) -> Result<[[f32;576]; 2], DecodeError> {
+    pub fn decode_mp3(&mut self, reader: &mut BufReader<File>) -> Result<Vec<f32>, DecodeError> {
     
         let mut buf = [0u8;4];
         match reader.read_exact(&mut buf) {
@@ -79,7 +81,7 @@ impl Decoder {
             - if mpeg_header.channel == MpegChannelMode::SingleChannel {17} else {32}
             - if mpeg_header.protection == MpegProtection::Protected {2} else {0}
             + if mpeg_header.padding {1} else {0};
-        // println!("nslots: {}", nslots);
+        dbg_println!(DebugType::Header, "nslots: {}", nslots);
         
         self.main_buf = self.main_buf.split_off(self.main_buf.len() - side_info.main_data_end);
         self.main_data_begin = side_info.main_data_end;
@@ -90,31 +92,50 @@ impl Decoder {
     
         // reader.seek(std::io::SeekFrom::Current(nslots as i64)).unwrap();
     
-        let mut sf = [ScaleFactor::new(); 2];
-        let mut samples = [[0isize; 576]; 2];
+        let mut sf = [[ScaleFactor::new(); 2]; 2];
+        let mut samples = [[[0.0; 576]; 2]; 2];
         let mut bs = BitStream::new(&mut self.main_buf);
+        let mut pcm = vec![0.0; 2304];
+
         for gr in 0..2 {
-            let max_bit = bs.get_bit_offset() + side_info.granule[gr].part2_3_length;
-            sf[gr] = parse_scale_factor(gr, &mut bs, &side_info, sf[0]);
-            samples[gr] = decode_huffman(gr, &mut bs, &mpeg_header, &side_info, max_bit);
+            let granule = &side_info.granule[gr];
+            for ch in 0..self.channel_num {
+                let channel = &granule.channel[ch];
+                let max_bit = bs.get_bit_offset() + channel.part2_3_length;
+                sf[gr][ch] = parse_scale_factor(gr, &mut bs, &side_info.scfsi[ch], &channel, sf[0][ch]);
+                decode_huffman(&mut bs, &mpeg_header, &channel, &mut samples[gr][ch], max_bit);
+            }
+
+            for ch in 0..self.channel_num {
+                let channel = &granule.channel[ch];
+                requantize(&mut samples[gr][ch], &mpeg_header, sf[gr][ch], channel);
+            }
+
+            if mpeg_header.channel == MpegChannelMode::JointStereo && mpeg_header.mode_extension.ms_stereo {
+                for i in 0..576 {
+                    let middle = samples[gr][0][i];
+                    let side = samples[gr][1][i];
+                    samples[gr][0][i] = (middle + side) / SQRT2;
+                    samples[gr][1][i] = (middle - side) / SQRT2;
+                }
+            }
+
+            for ch in 0..self.channel_num {
+                let channel = &granule.channel[ch];
+
+                if channel.block_type == 2 || channel.switch_point == 1 {
+                    samples[gr][ch] = reorder(samples[gr][ch], &mpeg_header, &channel);
+                }
+                if channel.block_type != 2 {
+                    anti_alias(&mut samples[gr][ch], &channel);
+                }
+                imdct(&mut samples[gr][ch], &mut self.prev_samples[ch], &channel);
+                frequency_inversion(&mut samples[gr][ch]);
+                // 合成滤波的同时将两个声道（如果有）数据交替写入pcm
+                self.synthesis.synthesis_filter(&samples[gr][ch], &mut pcm[gr * 576 * self.channel_num..], &mut self.fifo[ch], ch, self.channel_num);
+            }
         }
 
-        let mut result = [[0f32;576]; 2];
-        for gr in 0..2 {
-            let granule = side_info.granule[gr];
-            result[gr] = requantize(samples[gr], &mpeg_header, sf[gr], &granule);
-            
-            if granule.block_type == 2 || granule.switch_point == 1 {
-                result[gr] = reorder(result[gr], &mpeg_header, &granule);
-            }
-            if granule.block_type != 2 {
-                anti_alias(&mut result[gr], &granule);
-            }
-            
-            imdct(&mut result[gr], &mut self.prev_samples, &granule);
-            frequency_inversion(&mut result[gr]);
-            result[gr] = self.synthesis.synthesis_filter(&result[gr], &mut self.fifo);
-        }
-        Ok(result)
+        Ok(pcm[0..(1152*self.channel_num)].to_vec())
     }
 }

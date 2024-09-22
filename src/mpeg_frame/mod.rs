@@ -1,8 +1,7 @@
 use std::{fs::File, io::BufReader};
 
 use types::{
-    MpegBitRate, MpegChannelMode, MpegCopyright, MpegLayer, MpegOringinal, MpegProtection,
-    MpegSampleRate, MpegSideInfo, MpegVersion, ScaleFactor,
+    Channel, MpegBitRate, MpegChannelMode, MpegCopyright, MpegLayer, MpegModeExtension, MpegOringinal, MpegProtection, MpegSampleRate, MpegSideInfo, MpegVersion, ScaleFactor
 };
 
 use crate::{bitstream::{BitReader, BitStream}, DecodeError};
@@ -38,6 +37,7 @@ pub struct MpegHeader {
     pub sample_rate: MpegSampleRate,
     pub padding: bool,
     pub channel: MpegChannelMode,
+    pub mode_extension: MpegModeExtension,
     pub copyright: MpegCopyright,
     pub original: MpegOringinal,
 }
@@ -88,12 +88,17 @@ pub fn parse_header(header: &[u8; 4]) -> Result<MpegHeader, DecodeError> {
         "Channel Mode: {}({:02b})",
         channel_mode.to_string(), channel_mode.to_value());
 
-    let copyright = MpegCopyright::new((header[3] >> 2) & 0x01);
+    let mode_extension = MpegModeExtension::new((header[3] >> 4) & 0x03);
+    dbg_println!(DebugType::Header,
+        "Mode Extension: {}({:02b})",
+        mode_extension.to_string(), mode_extension.to_value());
+
+    let copyright = MpegCopyright::new((header[3] >> 3) & 0x01);
     dbg_println!(DebugType::Header,
         "Copyright: {}({})",
         copyright.to_string(), copyright.to_value());
 
-    let original = MpegOringinal::new((header[3] >> 1) & 0x01);
+    let original = MpegOringinal::new((header[3] >> 2) & 0x01);
     dbg_println!(DebugType::Header,
         "Original: {}({})",
         original.to_string(), original.to_value());
@@ -108,6 +113,7 @@ pub fn parse_header(header: &[u8; 4]) -> Result<MpegHeader, DecodeError> {
         sample_rate: sample_rate,
         padding: padding_bit,
         channel: channel_mode,
+        mode_extension: mode_extension,
         copyright: copyright,
         original: original,
     })
@@ -125,7 +131,7 @@ pub fn parse_side_info(header: &MpegHeader, bs: &mut BitStream<BufReader<File>>)
     if header.channel == MpegChannelMode::SingleChannel {
         side_info.private_bits = bs.read(5).unwrap();
         let scfsi = bs.read(4).unwrap();
-        side_info.scfsi = [
+        side_info.scfsi[0] = [
             scfsi >> 3,
             (scfsi >> 2) & 0x01,
             (scfsi >> 1) & 0x01,
@@ -137,82 +143,123 @@ pub fn parse_side_info(header: &MpegHeader, bs: &mut BitStream<BufReader<File>>)
             side_info.private_bits);
         dbg_println!(DebugType::SideInfo,
             "scfsi: [{:01b}, {:01b}, {:01b}, {:01b}]",
-            side_info.scfsi[0], side_info.scfsi[1], side_info.scfsi[2], side_info.scfsi[3]);
+            side_info.scfsi[0][0], side_info.scfsi[0][1], side_info.scfsi[0][2], side_info.scfsi[0][3]);
 
-        let granule = &mut side_info.granule;
         for gr in 0..2 {
-            granule[gr].part2_3_length = bs.read(12).unwrap();
-            granule[gr].big_values = bs.read(9).unwrap();
-            granule[gr].global_gain = bs.read(8).unwrap();
-            granule[gr].scalefac_compress = bs.read(4).unwrap();
-            granule[gr].blocksplit_flag = bs.read(1).unwrap();
+            let channel = &mut side_info.granule[gr].channel[0];
+            channel.part2_3_length = bs.read(12).unwrap();
+            channel.big_values = bs.read(9).unwrap();
+            channel.global_gain = bs.read(8).unwrap();
+            channel.scalefac_compress = bs.read(4).unwrap();
+            channel.blocksplit_flag = bs.read(1).unwrap();
             
-            dbg_println!(DebugType::SideInfo,
-                "[\npart2_3_length: {0}({0:012b})", granule[gr].part2_3_length);
-            dbg_println!(DebugType::SideInfo,
-                "big_values: {0}({0:09b})", granule[gr].big_values);
-            dbg_println!(DebugType::SideInfo,
-                "global_gain: {0}({0:08b})", granule[gr].global_gain);
-            dbg_println!(DebugType::SideInfo,
-                "scalefac_compress: {0}({0:04b})", granule[gr].scalefac_compress);
-            dbg_println!(DebugType::SideInfo,
-                "blocksplit_flag: {0}", granule[gr].blocksplit_flag);
+            dbg_println!(DebugType::SideInfo, "Granule {}:", gr);
+            dbg_println!(DebugType::SideInfo, "[\npart2_3_length: {0}({0:012b})", channel.part2_3_length);
+            dbg_println!(DebugType::SideInfo, "big_values: {0}({0:09b})", channel.big_values);
+            dbg_println!(DebugType::SideInfo, "global_gain: {0}({0:08b})", channel.global_gain);
+            dbg_println!(DebugType::SideInfo, "scalefac_compress: {0}({0:04b})", channel.scalefac_compress);
+            dbg_println!(DebugType::SideInfo, "blocksplit_flag: {0}", channel.blocksplit_flag);
 
-            if granule[gr].blocksplit_flag != 0 {
-                granule[gr].block_type = bs.read(2).unwrap();
-                granule[gr].switch_point = bs.read(1).unwrap();
-                granule[gr].table_select = [bs.read(5).unwrap(), bs.read(5).unwrap(), 0];
-                granule[gr].subblock_gain = [
+            if channel.blocksplit_flag != 0 {
+                channel.block_type = bs.read(2).unwrap();
+                channel.switch_point = bs.read(1).unwrap();
+                channel.table_select = [bs.read(5).unwrap(), bs.read(5).unwrap(), 0];
+                channel.subblock_gain = [
                     bs.read(3).unwrap(),
                     bs.read(3).unwrap(),
                     bs.read(3).unwrap(),
                 ];
-                granule[gr].region_address1 = if granule[gr].block_type == 2 {8} else {7};
-                granule[gr].region_address2 = 20 - granule[gr].region_address1;
+                channel.region_address1 = if channel.block_type == 2 {8} else {7};
+                channel.region_address2 = 20 - channel.region_address1;
 
-                dbg_println!(DebugType::SideInfo,
-                    "\tblock_type: {:02b}", granule[gr].block_type);
-                dbg_println!(DebugType::SideInfo,
-                    "\tswitch_point: {:01b}", granule[gr].switch_point);
-                dbg_println!(DebugType::SideInfo,
-                    "\ttable_select: [{},{}]",
-                    granule[gr].table_select[0],
-                    granule[gr].table_select[1]);
-                dbg_println!(DebugType::SideInfo,
-                    "\tsubblock_gain: [{},{},{}]",
-                    granule[gr].subblock_gain[0],
-                    granule[gr].subblock_gain[1],
-                    granule[gr].subblock_gain[2]);
+                dbg_println!(DebugType::SideInfo, "\tblock_type: {:02b}", channel.block_type);
+                dbg_println!(DebugType::SideInfo, "\tswitch_point: {:01b}", channel.switch_point);
+                dbg_println!(DebugType::SideInfo, "\ttable_select: [{},{}]", channel.table_select[0], channel.table_select[1]);
+                dbg_println!(DebugType::SideInfo, "\tsubblock_gain: [{},{},{}]", channel.subblock_gain[0], channel.subblock_gain[1], channel.subblock_gain[2]);
             } else {
-                granule[gr].table_select = [
+                channel.table_select = [
                     bs.read(5).unwrap(),
                     bs.read(5).unwrap(),
                     bs.read(5).unwrap(),
                 ];
-                granule[gr].region_address1 = bs.read(4).unwrap();
-                granule[gr].region_address2 = bs.read(3).unwrap();
+                channel.region_address1 = bs.read(4).unwrap();
+                channel.region_address2 = bs.read(3).unwrap();
 
-                dbg_println!(DebugType::SideInfo,
-                    "\ttable_select: [{},{},{}]",
-                    granule[gr].table_select[0],
-                    granule[gr].table_select[1],
-                    granule[gr].table_select[2]);
-                dbg_println!(DebugType::SideInfo,
-                    "\tregion_address1: {}", granule[gr].region_address1);
-                dbg_println!(DebugType::SideInfo,
-                    "\tregion_address2: {}", granule[gr].region_address2);
+                dbg_println!(DebugType::SideInfo, "\ttable_select: [{},{},{}]", channel.table_select[0], channel.table_select[1], channel.table_select[2]);
+                dbg_println!(DebugType::SideInfo, "\tregion_address1: {}", channel.region_address1);
+                dbg_println!(DebugType::SideInfo, "\tregion_address2: {}", channel.region_address2);
             }
 
-            granule[gr].preflag = bs.read(1).unwrap();
-            granule[gr].scalefac_scale = bs.read(1).unwrap();
-            granule[gr].count1table_select = bs.read(1).unwrap();
+            channel.preflag = bs.read(1).unwrap();
+            channel.scalefac_scale = bs.read(1).unwrap();
+            channel.count1table_select = bs.read(1).unwrap();
 
-            dbg_println!(DebugType::SideInfo,
-                "\tpreflag: {}", granule[gr].preflag);
-            dbg_println!(DebugType::SideInfo,
-                "\tscalefac_scale: {}", granule[gr].scalefac_scale);
-            dbg_println!(DebugType::SideInfo,
-                "\tcount1table_select: {}\n]", granule[gr].count1table_select);
+            dbg_println!(DebugType::SideInfo, "\tpreflag: {}", channel.preflag);
+            dbg_println!(DebugType::SideInfo, "\tscalefac_scale: {}", channel.scalefac_scale);
+            dbg_println!(DebugType::SideInfo, "\tcount1table_select: {}\n]", channel.count1table_select);
+        }
+    } else {
+        side_info.private_bits = bs.read(3).unwrap();
+        for ch in 0..2 {
+            let scfsi = &mut side_info.scfsi[ch];
+            for i in 0..4 {
+                scfsi[i] = bs.read(1).unwrap();
+            }
+        }
+        for gr in 0..2 {
+            for ch in 0..2 {
+                let granule = &mut side_info.granule[gr];
+                let channel = &mut granule.channel[ch];
+
+                channel.part2_3_length = bs.read(12).unwrap();
+                channel.big_values = bs.read(9).unwrap();
+                channel.global_gain = bs.read(8).unwrap();
+                channel.scalefac_compress = bs.read(4).unwrap();
+                channel.blocksplit_flag = bs.read(1).unwrap();
+                
+                dbg_println!(DebugType::SideInfo, "Channel{} Granule{}:", ch, gr);
+                dbg_println!(DebugType::SideInfo, "[\npart2_3_length: {0}({0:012b})", channel.part2_3_length);
+                dbg_println!(DebugType::SideInfo, "big_values: {0}({0:09b})", channel.big_values);
+                dbg_println!(DebugType::SideInfo, "global_gain: {0}({0:08b})", channel.global_gain);
+                dbg_println!(DebugType::SideInfo, "scalefac_compress: {0}({0:04b})", channel.scalefac_compress);
+                dbg_println!(DebugType::SideInfo, "blocksplit_flag: {0}", channel.blocksplit_flag);
+                if channel.blocksplit_flag != 0 {
+                    channel.block_type = bs.read(2).unwrap();
+                    channel.switch_point = bs.read(1).unwrap();
+                    channel.table_select = [
+                        bs.read(5).unwrap(),
+                        bs.read(5).unwrap(),
+                        0
+                    ];
+                    channel.subblock_gain = [
+                        bs.read(3).unwrap(),
+                        bs.read(3).unwrap(),
+                        bs.read(3).unwrap(),
+                    ];
+
+                    channel.region_address1 = if channel.block_type == 2 {8} else {7};
+                    channel.region_address2 = 20 - channel.region_address1;dbg_println!(DebugType::SideInfo, "\tblock_type: {:02b}", channel.block_type);
+                    dbg_println!(DebugType::SideInfo, "\tswitch_point: {:01b}", channel.switch_point);
+                    dbg_println!(DebugType::SideInfo, "\ttable_select: [{},{}]", channel.table_select[0], channel.table_select[1]);
+                    dbg_println!(DebugType::SideInfo, "\tsubblock_gain: [{},{},{}]", channel.subblock_gain[0], channel.subblock_gain[1], channel.subblock_gain[2]);
+                } else {
+                    channel.table_select = [
+                        bs.read(5).unwrap(),
+                        bs.read(5).unwrap(),
+                        bs.read(5).unwrap(),
+                    ];
+                    channel.region_address1 = bs.read(4).unwrap();
+                    channel.region_address2 = bs.read(3).unwrap();
+
+                    dbg_println!(DebugType::SideInfo, "\ttable_select: [{},{},{}]", channel.table_select[0], channel.table_select[1], channel.table_select[2]);
+                    dbg_println!(DebugType::SideInfo, "\tregion_address1: {}", channel.region_address1);
+                    dbg_println!(DebugType::SideInfo, "\tregion_address2: {}", channel.region_address2);
+                }
+
+                channel.preflag = bs.read(1).unwrap();
+                channel.scalefac_scale = bs.read(1).unwrap();
+                channel.count1table_select = bs.read(1).unwrap();
+            }
         }
     }
     side_info
@@ -221,23 +268,23 @@ pub fn parse_side_info(header: &MpegHeader, bs: &mut BitStream<BufReader<File>>)
 pub fn parse_scale_factor<R: BitReader>(
     gr: usize,
     bs: &mut BitStream<R>,
-    side_info: &MpegSideInfo,
+    scfsi: &[usize; 4],
+    channel: &Channel,
     sf_gr0: ScaleFactor,
 ) -> ScaleFactor {
-    let granule = side_info.granule[gr];
 
-    let slen1 = SLEN[granule.scalefac_compress][0];
-    let slen2 = SLEN[granule.scalefac_compress][1];
+    let slen1 = SLEN[channel.scalefac_compress][0];
+    let slen2 = SLEN[channel.scalefac_compress][1];
 
     let mut sf_l = [0usize; 23];
     let mut sf_s = [[0usize; 3]; 13];
 
     dbg_println!(DebugType::ScaleFactor, "\nScale factor:");
 
-    if granule.blocksplit_flag == 1 && granule.block_type == 2 {
+    if channel.blocksplit_flag == 1 && channel.block_type == 2 {
 
         // 如果Block的类型是短块
-        let (switch_point_l, switch_point_s) = if granule.switch_point == 0 {
+        let (switch_point_l, switch_point_s) = if channel.switch_point == 0 {
             (0, 0)
         } else {
             (8, 3)
@@ -276,7 +323,7 @@ pub fn parse_scale_factor<R: BitReader>(
             for i in 0..4 {
                 let slen = if i < 2 {slen1} else {slen2};
                 let sb_len = if i == 0 {6} else {5};
-                if side_info.scfsi[i] == 1 {
+                if scfsi[i] == 1 {
                     for _ in 0..sb_len {
                         sf_l[sfb] = sf_gr0.sf_l[sfb];
                         sfb += 1;

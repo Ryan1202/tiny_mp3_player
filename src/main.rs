@@ -66,7 +66,7 @@ fn write_wav_header<W: Write>(
 #[test]
 fn test() {
 
-    let file = File::open("test.mp3").expect("打开文件失败！");
+    let file = File::open("22.mp3").expect("打开文件失败！");
     let mut reader = BufReader::new(file);
 
     let mut buf = [0u8;10];
@@ -81,19 +81,32 @@ fn test() {
     let mut decoder = Decoder::new();
 
     let mut file = File::create("out.wav").unwrap();
-    write_wav_header(&mut file, 2300 * 1152, 48000, 1, 16).unwrap();
+    write_wav_header(&mut file, 230 * 1152, 44100, 2, 16).unwrap();
 
     let mut _i = 0;
-    loop {
-        let pcm_data = decoder.decode_mp3(&mut reader).unwrap();
+    'outer: loop {
+        let pcm_data = match decoder.decode_mp3(&mut reader) {
+            Ok(pcm_data) => pcm_data,
+            Err(e) => {
+                match e {
+                    DecodeError::EndOfFile => {
+                        dbg_println!(DebugType::Decoder, "到达文件末尾，解码完成");
+                        break 'outer;
+                    },
+                    _ => {
+                        dbg_println!(DebugType::Decoder, "解码错误: {:?}", e);
+                        break 'outer;
+                    }
+                }
+            },
+        };
+        let mut _j = 0;
         for a in pcm_data {
-            let mut _j = 0;
-            for b in a {
-                let x = pcm_f32_to_int16(b);
-                file.write_all(&x.to_le_bytes()).unwrap();
-                _j += 1;
-            }
+            let x = pcm_f32_to_int16(a);
+            file.write_all(&x.to_le_bytes()).unwrap();
+            _j += 1;
         }
+        _i += 1;
     }
 }
 
@@ -135,10 +148,14 @@ fn main() {
             },
         };
 
-        let samples: Vec<i16> = pcm_data.iter().flat_map(|channel| {
-            channel.iter().map(|&sample| pcm_f32_to_int16(sample))
-        }).collect();
-        let source = rodio::buffer::SamplesBuffer::new(decoder.channel_num as u16, decoder.sample_rate as u32, samples);
+        let samples: Vec<i16> = pcm_data.iter()
+            .map(|&sample| pcm_f32_to_int16(sample))
+            .collect();
+        let source = rodio::buffer::SamplesBuffer::new(
+            decoder.channel_num as u16, 
+            decoder.sample_rate as u32, 
+            samples
+        );
         sink.append(source);
     }
     dbg_println!(DebugType::Decoder, "音频解码完成");

@@ -354,6 +354,23 @@ impl MpegChannelMode {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub struct MpegModeExtension {
+    pub ms_stereo: bool,
+    pub intensity_stereo: bool,
+}
+impl MpegModeExtension {
+    pub fn new(value: u8) -> Self {
+        Self { ms_stereo: (value >> 1) != 0, intensity_stereo: (value & 1) != 0 }
+    }
+    pub fn to_string(&self) -> String {
+        format!("MS Stereo: {}, Intensity Stereo: {}", self.ms_stereo, self.intensity_stereo)
+    }
+    pub fn to_value(&self) -> u8 {
+        (self.ms_stereo as u8) << 1 | (self.intensity_stereo as u8)
+    }
+}
+
 pub enum MpegCopyright {
     NotCopyrighted,
     Copyrighted,
@@ -413,7 +430,7 @@ impl MpegOringinal {
 pub struct MpegSideInfo {
     pub main_data_end: usize,
     pub private_bits: usize,
-    pub scfsi: [usize; 4],
+    pub scfsi: [[usize; 4]; 2],
     pub granule: [Granule; 2],
 }
 impl MpegSideInfo {
@@ -421,7 +438,7 @@ impl MpegSideInfo {
         Self {
             main_data_end: 0,
             private_bits: 0,
-            scfsi: [0usize; 4],
+            scfsi: [[0usize; 4]; 2],
             granule: [Granule::new(); 2],
         }
     }
@@ -429,6 +446,19 @@ impl MpegSideInfo {
 
 #[derive(Clone, Copy)]
 pub struct Granule {
+    pub channel: [Channel; 2],
+}
+impl Granule {
+    pub fn new() -> Self {
+        Self {
+            channel: [Channel::new(), Channel::new()],
+        }
+    }
+    
+}
+
+#[derive(Clone, Copy)]
+pub struct Channel {
     pub part2_3_length: usize,
     pub big_values: usize,
     pub global_gain: usize,
@@ -444,7 +474,7 @@ pub struct Granule {
     pub scalefac_scale: usize,
     pub count1table_select: usize,
 }
-impl Granule {
+impl Channel {
     pub fn new() -> Self {
         Self {
             part2_3_length: 0,

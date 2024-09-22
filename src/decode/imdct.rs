@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use crate::mpeg_frame::types::Granule;
+use crate::mpeg_frame::types::{Channel, Granule};
 
 const SINE_BLOCK: [[f32; 36]; 4] = [
 	[
@@ -17,11 +17,11 @@ const SINE_BLOCK: [[f32; 36]; 4] = [
 pub fn imdct(
     samples: &mut [f32; 576],
     prev_samples: &mut [[f32;18]; 32],
-    granle: &Granule,
+    channel: &Channel,
 ) {
-    let n = if granle.block_type == 2 {12} else {36};
+    let n = if channel.block_type == 2 {12} else {36};
     let half_n = n / 2;
-    let win_cnt = if granle.block_type == 2 {3} else {1};
+    let win_cnt = if channel.block_type == 2 {3} else {1};
     let mut sample_block = [0f32; 36];
 
     for block in 0..32 {
@@ -33,11 +33,11 @@ pub fn imdct(
                         (PI / n as f32 / 2.0 * (2.0 * i as f32 + 1.0 + half_n as f32) * (2.0 * k as f32 + 1.0)).cos();
                 }
 
-                sample_block[win * n + i] = xi * SINE_BLOCK[granle.block_type][i];
+                sample_block[win * n + i] = xi * SINE_BLOCK[channel.block_type][i];
             }
         }
 
-        if granle.block_type == 2 {
+        if channel.block_type == 2 {
             let mut tmp_block = [0f32; 36];
             for i in 0..6 {tmp_block[i] = 0.0;}
             for i in 6..12 {tmp_block[i] = sample_block[i - 6];}

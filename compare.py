@@ -66,7 +66,7 @@ def compare_single_frame(ax, data1, data2, frame_size, frame_number):
     plt.draw()
 
 # 使用示例
-fig, ax1, ax2, data1, data2, frame_size, num_frames = plot_waveform_comparison('2.wav', 'jntm.wav')
+fig, ax1, ax2, data1, data2, frame_size, num_frames = plot_waveform_comparison('out.wav', '22.wav')
 
 current_frame = 0
 

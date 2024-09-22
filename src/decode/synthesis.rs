@@ -20,13 +20,15 @@ impl Synthesis {
     pub fn synthesis_filter(
         &self,
         samples: &[f32; 576],
-        fifo: &mut [f32; 1024],
-    ) -> [f32; 576] {
+        pcm: &mut [f32],
+        fifo: &mut [f32],
+        ch: usize,
+        ch_num: usize,
+    ) {
         let mut s = [0f32; 32];
         let mut u = [0f32; 512];
         let mut w = [0f32; 512];
 
-        let mut pcm = [0f32; 576];
         for sb in 0..18 {
             for i in 0..32 {
                 s[i] = samples[i * 18 + sb];
@@ -57,9 +59,11 @@ impl Synthesis {
                 for j in 0..16 {
                     sum += w[j * 32 + i];
                 }
-                pcm[32 * sb + i] = sum;
+                // pcm[32 * sb + i] = sum;
+                
+                /* 将左右声道数据交替写入 */
+                pcm[(32 * sb + i) * ch_num + ch] = sum;
             }
         }
-        pcm
     }
 }

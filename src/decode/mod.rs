@@ -1,4 +1,4 @@
-use crate::{huffman::tables::BAND_WIDTH_S, mpeg_frame::{types::Granule, MpegHeader}};
+use crate::{huffman::tables::BAND_WIDTH_S, mpeg_frame::{types::{Channel, Granule}, MpegHeader}};
 
 pub mod requantize;
 pub mod imdct;
@@ -20,7 +20,7 @@ const SUBBAND_SIZE_S: usize = 6;
 pub fn reorder(
     samples: [f32; 576],
     header: &MpegHeader,
-    granule: &Granule,
+    channel: &Channel,
 ) -> [f32; 576] {
     let mut result = [0f32; 576];
 
@@ -29,7 +29,7 @@ pub fn reorder(
     let mut block = 0;
 
     let start;
-    if granule.switch_point == 1 {
+    if channel.switch_point == 1 {
         // 如果是混合块仅对短块部分处理
         start = 3;
         base1 = 36;
@@ -61,10 +61,10 @@ pub fn reorder(
 
 pub fn anti_alias(
     samples: &mut [f32; 576],
-    granule: &Granule,
+    channel: &Channel,
 ) {
     let end;
-    if granule.switch_point == 1 {
+    if channel.switch_point == 1 {
         end = 2;
     } else {
         end = 32;
